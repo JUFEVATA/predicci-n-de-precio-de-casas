@@ -4,20 +4,17 @@ import requests
 import time
 from io import StringIO
 
-st.set_page_config(
-    page_title="Predicción precio de casas",
-    page_icon="🏠",
-    layout="centered"
-)
+st.set_page_config(page_title="Predicción precio de casas", page_icon="🏠")
 
 st.title("Predicción del precio medio de casas")
-st.write("Ingresa las variables del inmueble y consulta el modelo desplegado en DataRobot.")
 
 # =========================
 # CONFIGURACIÓN DATAROBOT
 # =========================
 
 DATAROBOT_API_KEY = st.secrets["DATAROBOT_API_KEY"].strip()
+DATAROBOT_API_KEY = DATAROBOT_API_KEY.replace("Token ", "").replace("Bearer ", "").strip()
+
 DATAROBOT_DEPLOYMENT_ID = st.secrets["DATAROBOT_DEPLOYMENT_ID"].strip()
 DATAROBOT_HOST = st.secrets["DATAROBOT_HOST"].strip().rstrip("/")
 
@@ -29,7 +26,7 @@ HEADERS = {
 }
 
 # =========================
-# FORMULARIO DE ENTRADA
+# VARIABLES DEL MODELO
 # =========================
 
 st.subheader("Variables de entrada")
@@ -92,7 +89,7 @@ datos = pd.DataFrame([{
     "proximidad_oceano": proximidad_oceano
 }])
 
-st.subheader("Datos enviados al modelo")
+st.subheader("Datos enviados")
 st.dataframe(datos, use_container_width=True)
 
 # =========================
@@ -115,7 +112,7 @@ def predecir_con_datarobot(df):
     )
 
     if crear_job.status_code not in [200, 201, 202]:
-        raise Exception(crear_job.text)
+        raise Exception(f"Error creando job: {crear_job.text}")
 
     job = crear_job.json()
 
@@ -128,13 +125,13 @@ def predecir_con_datarobot(df):
         upload_url,
         data=csv_data,
         headers={
-            "Content-Type": "text/csv; encoding=utf-8",
-            "Content-Length": str(len(csv_data))
+            "Content-type": "text/csv; encoding=utf-8",
+            "Content-length": str(len(csv_data))
         }
     )
 
     if subir_csv.status_code not in [200, 201, 202, 204]:
-        raise Exception(subir_csv.text)
+        raise Exception(f"Error subiendo CSV: {subir_csv.text}")
 
     while True:
         estado_response = requests.get(
@@ -143,7 +140,7 @@ def predecir_con_datarobot(df):
         )
 
         if estado_response.status_code != 200:
-            raise Exception(estado_response.text)
+            raise Exception(f"Error consultando estado: {estado_response.text}")
 
         estado = estado_response.json()
         status = estado["status"]
@@ -152,7 +149,7 @@ def predecir_con_datarobot(df):
             break
 
         if status in ["FAILED", "ABORTED"]:
-            raise Exception(estado)
+            raise Exception(f"Job falló: {estado}")
 
         time.sleep(3)
 
@@ -164,14 +161,13 @@ def predecir_con_datarobot(df):
     )
 
     if resultado_response.status_code != 200:
-        raise Exception(resultado_response.text)
+        raise Exception(f"Error descargando resultado: {resultado_response.text}")
 
     resultado_df = pd.read_csv(StringIO(resultado_response.text))
-
     return resultado_df
 
 # =========================
-# BOTÓN DE PREDICCIÓN
+# BOTÓN
 # =========================
 
 if st.button("Predecir valor de vivienda"):
@@ -184,23 +180,21 @@ if st.button("Predecir valor de vivienda"):
         st.subheader("Resultado completo")
         st.dataframe(resultado, use_container_width=True)
 
-        posibles_columnas = [
+        columnas_pred = [
             col for col in resultado.columns
             if "prediction" in col.lower()
             or "pred" in col.lower()
-            or "valor_mediano_vivienda" in col.lower()
         ]
 
-        if posibles_columnas:
-            prediccion = resultado[posibles_columnas[0]].iloc[0]
+        if columnas_pred:
+            prediccion = resultado[columnas_pred[0]].iloc[0]
 
             st.metric(
-                label="Valor mediano estimado de la vivienda",
-                value=f"${float(prediccion):,.2f}"
+                "Valor mediano estimado de la vivienda",
+                f"${float(prediccion):,.2f}"
             )
         else:
-            st.warning("No se encontró automáticamente la columna de predicción.")
-            st.write("Columnas disponibles:")
+            st.warning("No se encontró la columna de predicción.")
             st.write(resultado.columns.tolist())
 
     except Exception as e:
