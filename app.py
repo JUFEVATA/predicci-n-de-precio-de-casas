@@ -5,30 +5,39 @@ import time
 from io import StringIO
 
 st.set_page_config(
-    page_title="Predicción valor de vivienda",
+    page_title="Predicción precio de casas",
     page_icon="🏠",
     layout="centered"
 )
 
-st.title("Predicción del valor mediano de vivienda")
+st.title("Predicción del precio medio de casas")
+st.write("Ingresa las variables del inmueble y consulta el modelo desplegado en DataRobot.")
 
-DATAROBOT_API_KEY = st.secrets["DATAROBOT_API_KEY"]
-DATAROBOT_DEPLOYMENT_ID = st.secrets["DATAROBOT_DEPLOYMENT_ID"]
-DATAROBOT_HOST = st.secrets["DATAROBOT_HOST"]
+# =========================
+# CONFIGURACIÓN DATAROBOT
+# =========================
+
+DATAROBOT_API_KEY = st.secrets["DATAROBOT_API_KEY"].strip()
+DATAROBOT_DEPLOYMENT_ID = st.secrets["DATAROBOT_DEPLOYMENT_ID"].strip()
+DATAROBOT_HOST = st.secrets["DATAROBOT_HOST"].strip().rstrip("/")
 
 BATCH_URL = f"{DATAROBOT_HOST}/api/v2/batchPredictions/"
 
 HEADERS = {
     "Authorization": f"Token {DATAROBOT_API_KEY}",
-    "User-Agent": "Streamlit-DataRobot-App"
+    "User-Agent": "IntegrationSnippet-StandAlone-Python"
 }
+
+# =========================
+# FORMULARIO DE ENTRADA
+# =========================
 
 st.subheader("Variables de entrada")
 
 longitud = st.number_input("Longitud", value=-122.23, step=0.01)
 latitud = st.number_input("Latitud", value=37.88, step=0.01)
 
-edad_mediana_vivienda = st.slider(
+edad_mediana_vivienda = st.number_input(
     "Edad mediana de la vivienda",
     min_value=1,
     max_value=60,
@@ -86,6 +95,9 @@ datos = pd.DataFrame([{
 st.subheader("Datos enviados al modelo")
 st.dataframe(datos, use_container_width=True)
 
+# =========================
+# FUNCIÓN DE PREDICCIÓN
+# =========================
 
 def predecir_con_datarobot(df):
     payload = {
@@ -95,7 +107,10 @@ def predecir_con_datarobot(df):
 
     crear_job = requests.post(
         BATCH_URL,
-        headers={**HEADERS, "Content-Type": "application/json"},
+        headers={
+            **HEADERS,
+            "Content-Type": "application/json; encoding=utf-8"
+        },
         json=payload
     )
 
@@ -121,52 +136,73 @@ def predecir_con_datarobot(df):
     if subir_csv.status_code not in [200, 201, 202, 204]:
         raise Exception(subir_csv.text)
 
-    with st.spinner("Esperando respuesta de DataRobot..."):
-        while True:
-            estado = requests.get(job_url, headers=HEADERS).json()
-            status = estado["status"]
+    while True:
+        estado_response = requests.get(
+            job_url,
+            headers=HEADERS
+        )
 
-            if status == "COMPLETED":
-                break
+        if estado_response.status_code != 200:
+            raise Exception(estado_response.text)
 
-            if status in ["FAILED", "ABORTED"]:
-                raise Exception(f"El job falló: {estado}")
+        estado = estado_response.json()
+        status = estado["status"]
 
-            time.sleep(3)
+        if status == "COMPLETED":
+            break
+
+        if status in ["FAILED", "ABORTED"]:
+            raise Exception(estado)
+
+        time.sleep(3)
 
     download_url = estado["links"]["download"]
 
-    resultado_csv = requests.get(download_url, headers=HEADERS)
+    resultado_response = requests.get(
+        download_url,
+        headers=HEADERS
+    )
 
-    if resultado_csv.status_code != 200:
-        raise Exception(resultado_csv.text)
+    if resultado_response.status_code != 200:
+        raise Exception(resultado_response.text)
 
-    resultado_df = pd.read_csv(StringIO(resultado_csv.text))
+    resultado_df = pd.read_csv(StringIO(resultado_response.text))
 
     return resultado_df
 
+# =========================
+# BOTÓN DE PREDICCIÓN
+# =========================
 
 if st.button("Predecir valor de vivienda"):
     try:
-        resultado = predecir_con_datarobot(datos)
+        with st.spinner("Consultando DataRobot..."):
+            resultado = predecir_con_datarobot(datos)
 
         st.success("Predicción realizada correctamente")
 
-        st.subheader("Resultado")
+        st.subheader("Resultado completo")
         st.dataframe(resultado, use_container_width=True)
 
-        columnas_prediccion = [
+        posibles_columnas = [
             col for col in resultado.columns
-            if "prediction" in col.lower() or "pred" in col.lower()
+            if "prediction" in col.lower()
+            or "pred" in col.lower()
+            or "valor_mediano_vivienda" in col.lower()
         ]
 
-        if columnas_prediccion:
-            valor = resultado[columnas_prediccion[0]].iloc[0]
+        if posibles_columnas:
+            prediccion = resultado[posibles_columnas[0]].iloc[0]
+
             st.metric(
                 label="Valor mediano estimado de la vivienda",
-                value=f"${valor:,.2f}"
+                value=f"${float(prediccion):,.2f}"
             )
+        else:
+            st.warning("No se encontró automáticamente la columna de predicción.")
+            st.write("Columnas disponibles:")
+            st.write(resultado.columns.tolist())
 
     except Exception as e:
         st.error("Error al consultar DataRobot")
-        st.write(e)
+        st.exception(e)
